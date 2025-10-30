@@ -1,0 +1,4 @@
+"1. por cmd ejecute esto obtenga el codigo unico: wmic csproduct get uuid
+
+1. Abra la terminal en esta carpeta\n"
+            "2. Ejecute: python generar_licencia.py "SERAF" 30 --uuid 34444335-3631-3936-4C56-563936314435

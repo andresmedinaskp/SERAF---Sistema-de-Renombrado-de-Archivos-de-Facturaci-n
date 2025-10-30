@@ -1,0 +1,14 @@
+# Entorno virtual de Python
+.venv/
+
+# Carpetas de compilación o distribución
+dist/
+build/
+__pycache__/
+# Archivo de configuración privado
+
+database.ini
+
+
+.github/instructions/kluster-code-verify.instructions.md
+.kluster
