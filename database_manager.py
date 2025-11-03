@@ -66,10 +66,38 @@ class DatabaseManager:
             self._connection = None
 
 # Función global para compatibilidad
-def get_connection():
-    """Función global para compatibilidad con código existente"""
-    db = DatabaseManager()
-    return db.get_connection()
+def get_connection(self):
+    """Obtiene conexión singleton a la BD"""
+    if self._connection is None:
+        params = self.get_db_params()
+        
+        if not params['database']:
+            raise Exception("Ruta de base de datos no especificada en database.ini")
+        
+        # Verificar si es una ruta local de archivo
+        if not any(prefix in params['database'].lower() for prefix in ['//', '127.0.0.1', 'localhost']):
+            # Es probablemente un archivo local
+            if not os.path.exists(params['database']):
+                raise Exception(f"Archivo de base de datos no encontrado: {params['database']}")
+        
+        try:
+            self._connection = fdb.connect(
+                host=params['host'],
+                database=params['database'],
+                user=params['user'],
+                password=params['password'],
+                charset=params['charset']
+            )
+        except fdb.DatabaseError as e:
+            # Proporcionar un mensaje más específico para Firebird
+            error_msg = f"Error de Firebird: {str(e)}"
+            if '335544721' in str(e) or '335544722' in str(e):
+                error_msg += "\n\nPosible problema de conexión de red. Verifique:\n- Dirección IP del servidor\n- Servicio Firebird ejecutándose\n- Firewall/puerto 3050"
+            raise Exception(error_msg)
+        except Exception as e:
+            raise Exception(f"Error conectando a la base de datos: {str(e)}")
+    
+    return self._connection
 
 # Funciones de utilidad
 def obtener_datos_ips():

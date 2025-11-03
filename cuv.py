@@ -1512,16 +1512,187 @@ def main():
     # Verificar conexión a BD (comunicar al usuario de forma visual si falló)
     if not _CONFIG_MANAGER_OK:
         detalle = _CONFIG_MANAGER_ERROR_MSG or "No se pudo conectar a la base de datos."
-        msg_text = (
-            "No se pudo establecer conexión con la base de datos.\n\n"
-            f"Detalle: {detalle}\n\n"
-            "Verifique:\n"
-            "1. Que el archivo database.ini existe y tiene la configuración correcta\n"
-            "2. Que el servidor de base de datos está ejecutándose\n"
-            "3. Que las credenciales son válidas\n\n"
-            "Si el archivo database.ini no existe, cree uno según la documentación del proyecto."
+        
+        # Extraer información específica del error de Firebird
+        error_message = ""
+        sql_code = ""
+        firebird_code = ""
+        
+        # Analizar la estructura del error (puede ser tupla o string)
+        if isinstance(detalle, tuple):
+            error_message = str(detalle[0]) if len(detalle) > 0 else str(detalle)
+            sql_code = str(detalle[1]) if len(detalle) > 1 else ""
+            firebird_code = str(detalle[2]) if len(detalle) > 2 else ""
+        else:
+            error_message = str(detalle)
+        
+        full_error_text = f"{error_message} {sql_code} {firebird_code}"
+        full_error_lower = full_error_text.lower()
+        
+        print(f"DEBUG - Error completo: {full_error_text}")
+        
+        # ORDEN SEGÚN TU LÓGICA:
+        # 1. PRIMERO verifica HOST/CONEXIÓN
+        # 2. LUEGO verifica BD/ARCHIVO  
+        # 3. FINALMENTE verifica CREDENCIALES
+        
+        # 1. ERRORES DE HOST/CONEXIÓN (PRIMERO)
+        conexion_patterns = [
+            '335544721',  # Código específico Firebird para errores de red
+            'unable to complete network request',
+            'no se puede completar la solicitud de red',
+            'failed to establish a connection', 
+            'no se pudo establecer la conexión',
+            'network request',
+            'solicitud de red',
+            'connection refused',
+            'conexión rechazada',
+            'timeout',
+            'timed out',
+            'no route to host',
+            'host unreachable'
+        ]
+        
+        is_conexion_error = any(pattern in full_error_lower for pattern in conexion_patterns)
+        
+        if is_conexion_error:
+            # Extraer dirección IP/hostname del error
+            problematic_host = None
+            import re
+            
+            host_patterns = [
+                r'host "([^"]+)"',
+                r'to host ([^\s.,]+)', 
+                r'host ([^\s.,]+)',
+                r'request to ([^\s]+)',
+                r'connecting to ([^\s]+)',
+            ]
+            
+            for pattern in host_patterns:
+                matches = re.findall(pattern, error_message, re.IGNORECASE)
+                if matches:
+                    problematic_host = matches[0]
+                    # Filtrar hosts inválidos
+                    if problematic_host and problematic_host not in ['database:', 'database', 'n-']:
+                        break
+                    else:
+                        problematic_host = None
+            
+            # Buscar IPs si no encontramos hostname
+            if not problematic_host:
+                ip_matches = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', error_message)
+                if ip_matches:
+                    problematic_host = ip_matches[0]
+            
+            titulo = "Error de Conexión al Servidor"
+            
+            if problematic_host:
+                mensaje = (
+                    f"No se puede conectar al servidor de base de datos\n\n"
+                    f"El servidor '{problematic_host}' no está accesible:\n\n"
+                    #f"Error detallado:\n{error_message}\n\n"
+                    "Posibles causas:\n"
+                    f"• La dirección {problematic_host} es incorrecta\n"
+                    "• El servidor Firebird no está ejecutándose\n" 
+                    "• El puerto 3050 está bloqueado por firewall\n"
+                    "• Problemas de red entre este equipo y el servidor\n\n"
+                    "Sugerencias:\n"
+                    f"• Verifique la dirección '{problematic_host}' en database.ini\n"
+                    "• Confirme que el servidor Firebird esté en ejecución\n"
+                    f"• Pruebe hacer ping a {problematic_host}\n"
+                    "• Verifique la configuración de firewall\n"
+                    "• Contacte al administrador de red\n\n"
+                )
+            else:
+                mensaje = (
+                    "No se puede conectar al servidor de base de datos\n\n"
+                    "Problema de conectividad de red:\n\n"
+                    #f"Error detallado:\n{error_message}\n\n"
+                    "Sugerencias:\n"
+                    "• Verifique la configuración en database.ini\n"
+                    "• Confirme que el servidor Firebird esté en ejecución\n"
+                    "• Verifique la configuración de firewall\n"
+                    "• Contacte al administrador de red\n\n"
+                )
+        
+        # 2. ERRORES DE ARCHIVO/BD NO ENCONTRADA (SEGUNDO)
+        elif any(phrase in full_error_lower for phrase in [
+            '335544344', '335544345',  # Códigos Firebird para archivo no encontrado
+            'file not found',
+            'archivo no encontrado',
+            'no such file',
+            'no existe el archivo',
+            'database file not found',
+            'archivo de base de datos no encontrado'
+        ]):
+            titulo = "Base de Datos No Encontrada"
+            mensaje = (
+                "Archivo de base de datos no disponible\n\n"
+                "No se puede localizar o acceder al archivo de base de datos.\n\n"
+                #"Error específico:\n"
+                #f"{error_message}\n\n"
+                "Sugerencias:\n"
+                "• Verifique la ruta de la base de datos en database.ini\n"
+                "• Confirme que el archivo .FDB existe en esa ubicación\n"
+                "• Verifique los permisos de acceso al archivo\n"
+                "• Contacte al administrador del sistema\n\n"
+            )
+        
+        # 3. ERRORES DE CREDENCIALES (TERCERO)
+        elif any(phrase in full_error_lower for phrase in [
+            '335544472',  # Código específico de Firebird para credenciales
+            'your user name and password are not defined',
+            'usuario y contraseña no están definidos', 
+            'wrong username or password',
+            'usuario o contraseña incorrectos',
+            'login incorrecto',
+            'not defined',
+            'no están definidos'
+        ]) or any(code in [sql_code, firebird_code] for code in ['-902', '335544472']):
+            
+            titulo = "Error de Autenticación"
+            mensaje = (
+                "Credenciales incorrectas\n\n"
+                "El usuario o contraseña proporcionados no son válidos.\n\n"
+                #"Error específico:\n"
+                #f"{error_message}\n\n"
+                "Sugerencias:\n"
+                "• Verifique el usuario y contraseña en database.ini\n"
+                "• Asegúrese de que las mayúsculas/minúsculas sean correctas\n"
+                "• Contacte al administrador de la base de datos\n"
+                "• El administrador debe crear el usuario en Firebird\n\n"
+            )
+        
+        # 4. OTROS ERRORES DE FIREBIRD
+        elif '335544' in full_error_text:
+            titulo = "Error de Base de Datos Firebird"
+            mensaje = (
+                "Error específico de Firebird\n\n"
+                f"Detalle técnico:\n{error_message}\n\n"
+                f"Código SQL: {sql_code}\n"
+                f"Código Firebird: {firebird_code}\n\n"
+                "Contacte al administrador de la base de datos\n\n"
+            )
+        
+        # 5. ERROR GENÉRICO
+        else:
+            titulo = "Error de Base de Datos"
+            mensaje = f"Error al conectar con la base de datos:\n\n{error_message}\n\n"
+            if sql_code:
+                mensaje += f"Código SQL: {sql_code}\n"
+            if firebird_code:
+                mensaje += f"Código Firebird: {firebird_code}\n"
+        
+        # Mensaje final
+        mensaje_final = (
+            f"{mensaje}"
+            "Para soporte técnico:\n\n"
+            "Email: lozanoliceth60@gmail.com\n"
+            "Email: ripsjson2275@gmail.com\n"
+            "Web: www.rips2275.com"
         )
-        QMessageBox.critical(None, "Error de Base de Datos", msg_text)
+        
+        QMessageBox.critical(None, titulo, mensaje_final)
         sys.exit(1)
 
     ventana = VentanaPrincipal()
