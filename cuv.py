@@ -31,19 +31,17 @@ except Exception:
 # Verificar conexión a BD
 # -------------------------
 _CONFIG_MANAGER_OK = False
+_CONFIG_MANAGER_ERROR_MSG = ""  # <-- nueva variable para almacenar el detalle del error
 try:
     # Verificar conexión intentando listar configuraciones
     list_configs()
     _CONFIG_MANAGER_OK = True
 except Exception as e:
-    print(f"Error de conexión a BD: {e}")
-    QMessageBox.critical(None, "Error de Base de Datos", 
-                        f"No se pudo conectar a la base de datos:\n{str(e)}\n\n"
-                        "Verifique:\n"
-                        "1. Que el archivo database.ini existe y tiene la configuración correcta\n"
-                        "2. Que el servidor de base de datos está ejecutándose\n"
-                        "3. Que las credenciales son válidas")
-    sys.exit(1)
+    _CONFIG_MANAGER_OK = False
+    _CONFIG_MANAGER_ERROR_MSG = str(e)
+    # imprimir en consola para depuración; NO mostrar QMessageBox aquí (aún no hay QApplication seguro)
+    print(f"Error de conexión a BD: {_CONFIG_MANAGER_ERROR_MSG}")
+    # No hacer sys.exit aquí para permitir que main() maneje la alerta cuando la UI exista
 
 # -------------------------
 # UI helpers
@@ -1511,11 +1509,19 @@ def main():
         QMessageBox.critical(None, "Error", mensaje)
         sys.exit(1)
 
-    # Verificar conexión a BD (ya se hizo al importar, pero por si acaso)
+    # Verificar conexión a BD (comunicar al usuario de forma visual si falló)
     if not _CONFIG_MANAGER_OK:
-        QMessageBox.critical(None, "Error de Base de Datos", 
-                           "No se pudo establecer conexión con la base de datos.\n"
-                           "La aplicación no puede continuar.")
+        detalle = _CONFIG_MANAGER_ERROR_MSG or "No se pudo conectar a la base de datos."
+        msg_text = (
+            "No se pudo establecer conexión con la base de datos.\n\n"
+            f"Detalle: {detalle}\n\n"
+            "Verifique:\n"
+            "1. Que el archivo database.ini existe y tiene la configuración correcta\n"
+            "2. Que el servidor de base de datos está ejecutándose\n"
+            "3. Que las credenciales son válidas\n\n"
+            "Si el archivo database.ini no existe, cree uno según la documentación del proyecto."
+        )
+        QMessageBox.critical(None, "Error de Base de Datos", msg_text)
         sys.exit(1)
 
     ventana = VentanaPrincipal()
