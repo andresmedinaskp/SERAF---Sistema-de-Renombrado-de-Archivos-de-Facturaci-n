@@ -1509,32 +1509,41 @@ def main():
         QMessageBox.critical(None, "Error", mensaje)
         sys.exit(1)
 
-    # Verificar conexión a BD (comunicar al usuario de forma visual si falló)
-    if not _CONFIG_MANAGER_OK:
-        detalle = _CONFIG_MANAGER_ERROR_MSG or "No se pudo conectar a la base de datos."
+    # Verificar conexión a BD con firebirdsql - NUEVA IMPLEMENTACIÓN
+    try:
+        print("🔍 Iniciando verificación de conexión a BD...")
+        
+        # Test de conexión simple usando DatabaseManager
+        from database_manager import DatabaseManager
+        db = DatabaseManager()
+        conn = db.get_connection()
+        
+        # Test de consulta simple para verificar que funciona
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM RDB$DATABASE")
+        resultado = cur.fetchone()
+        cur.close()
+        
+        print(f"✅ Conexión a BD verificada correctamente. Resultado test: {resultado}")
+        
+        # Verificar también que config_manager funciona
+        from config_manager import list_configs
+        configs = list_configs()
+        print(f"✅ Config Manager funciona. Configuraciones encontradas: {len(configs)}")
+        
+        _CONFIG_MANAGER_OK = True
+        _CONFIG_MANAGER_ERROR_MSG = ""
+        
+    except Exception as e:
+        _CONFIG_MANAGER_OK = False
+        _CONFIG_MANAGER_ERROR_MSG = str(e)
+        print(f"❌ Error de conexión a BD: {_CONFIG_MANAGER_ERROR_MSG}")
         
         # Extraer información específica del error de Firebird
-        error_message = ""
-        sql_code = ""
-        firebird_code = ""
+        error_message = str(e)
+        full_error_lower = error_message.lower()
         
-        # Analizar la estructura del error (puede ser tupla o string)
-        if isinstance(detalle, tuple):
-            error_message = str(detalle[0]) if len(detalle) > 0 else str(detalle)
-            sql_code = str(detalle[1]) if len(detalle) > 1 else ""
-            firebird_code = str(detalle[2]) if len(detalle) > 2 else ""
-        else:
-            error_message = str(detalle)
-        
-        full_error_text = f"{error_message} {sql_code} {firebird_code}"
-        full_error_lower = full_error_text.lower()
-        
-        print(f"DEBUG - Error completo: {full_error_text}")
-        
-        # ORDEN SEGÚN TU LÓGICA:
-        # 1. PRIMERO verifica HOST/CONEXIÓN
-        # 2. LUEGO verifica BD/ARCHIVO  
-        # 3. FINALMENTE verifica CREDENCIALES
+        print(f"DEBUG - Error completo: {error_message}")
         
         # 1. ERRORES DE HOST/CONEXIÓN (PRIMERO)
         conexion_patterns = [
@@ -1550,7 +1559,8 @@ def main():
             'timeout',
             'timed out',
             'no route to host',
-            'host unreachable'
+            'host unreachable',
+            'cannot connect to database'
         ]
         
         is_conexion_error = any(pattern in full_error_lower for pattern in conexion_patterns)
@@ -1566,6 +1576,7 @@ def main():
                 r'host ([^\s.,]+)',
                 r'request to ([^\s]+)',
                 r'connecting to ([^\s]+)',
+                r"database '([^']+)'",
             ]
             
             for pattern in host_patterns:
@@ -1590,7 +1601,6 @@ def main():
                 mensaje = (
                     f"No se puede conectar al servidor de base de datos\n\n"
                     f"El servidor '{problematic_host}' no está accesible:\n\n"
-                    #f"Error detallado:\n{error_message}\n\n"
                     "Posibles causas:\n"
                     f"• La dirección {problematic_host} es incorrecta\n"
                     "• El servidor Firebird no está ejecutándose\n" 
@@ -1607,7 +1617,6 @@ def main():
                 mensaje = (
                     "No se puede conectar al servidor de base de datos\n\n"
                     "Problema de conectividad de red:\n\n"
-                    #f"Error detallado:\n{error_message}\n\n"
                     "Sugerencias:\n"
                     "• Verifique la configuración en database.ini\n"
                     "• Confirme que el servidor Firebird esté en ejecución\n"
@@ -1623,14 +1632,13 @@ def main():
             'no such file',
             'no existe el archivo',
             'database file not found',
-            'archivo de base de datos no encontrado'
+            'archivo de base de datos no encontrado',
+            'unavailable database'
         ]):
             titulo = "Base de Datos No Encontrada"
             mensaje = (
                 "Archivo de base de datos no disponible\n\n"
                 "No se puede localizar o acceder al archivo de base de datos.\n\n"
-                #"Error específico:\n"
-                #f"{error_message}\n\n"
                 "Sugerencias:\n"
                 "• Verifique la ruta de la base de datos en database.ini\n"
                 "• Confirme que el archivo .FDB existe en esa ubicación\n"
@@ -1647,15 +1655,15 @@ def main():
             'usuario o contraseña incorrectos',
             'login incorrecto',
             'not defined',
-            'no están definidos'
-        ]) or any(code in [sql_code, firebird_code] for code in ['-902', '335544472']):
+            'no están definidos',
+            'missing password',
+            'password not set'
+        ]):
             
             titulo = "Error de Autenticación"
             mensaje = (
                 "Credenciales incorrectas\n\n"
                 "El usuario o contraseña proporcionados no son válidos.\n\n"
-                #"Error específico:\n"
-                #f"{error_message}\n\n"
                 "Sugerencias:\n"
                 "• Verifique el usuario y contraseña en database.ini\n"
                 "• Asegúrese de que las mayúsculas/minúsculas sean correctas\n"
@@ -1663,25 +1671,43 @@ def main():
                 "• El administrador debe crear el usuario en Firebird\n\n"
             )
         
-        # 4. OTROS ERRORES DE FIREBIRD
-        elif '335544' in full_error_text:
+        # 4. ERRORES DE CHARSET/PARÁMETROS
+        elif any(phrase in full_error_lower for phrase in [
+            'unsupported on-disk structure',
+            'estructura de disco no soportada',
+            'character set',
+            'charset',
+            'codepage'
+        ]):
+            titulo = "Error de Configuración"
+            mensaje = (
+                "Problema de configuración de caracteres\n\n"
+                "Hay un problema con la configuración del charset/codificación.\n\n"
+                "Sugerencias:\n"
+                "• Verifique el parámetro 'charset' en database.ini\n"
+                "• Use 'WIN1252' para bases de datos latinas\n"
+                "• Use 'UTF8' para bases de datos Unicode\n"
+                "• Contacte al administrador de la base de datos\n\n"
+            )
+        
+        # 5. OTROS ERRORES DE FIREBIRD
+        elif '335544' in error_message:
             titulo = "Error de Base de Datos Firebird"
+            # Extraer código de error Firebird
+            codigo_match = re.search(r'335544\d+', error_message)
+            codigo = codigo_match.group(0) if codigo_match else "Desconocido"
+            
             mensaje = (
                 "Error específico de Firebird\n\n"
-                f"Detalle técnico:\n{error_message}\n\n"
-                f"Código SQL: {sql_code}\n"
-                f"Código Firebird: {firebird_code}\n\n"
+                f"Código de error: {codigo}\n"
+                f"Detalle: {error_message}\n\n"
                 "Contacte al administrador de la base de datos\n\n"
             )
         
-        # 5. ERROR GENÉRICO
+        # 6. ERROR GENÉRICO
         else:
             titulo = "Error de Base de Datos"
             mensaje = f"Error al conectar con la base de datos:\n\n{error_message}\n\n"
-            if sql_code:
-                mensaje += f"Código SQL: {sql_code}\n"
-            if firebird_code:
-                mensaje += f"Código Firebird: {firebird_code}\n"
         
         # Mensaje final
         mensaje_final = (
@@ -1695,9 +1721,24 @@ def main():
         QMessageBox.critical(None, titulo, mensaje_final)
         sys.exit(1)
 
-    ventana = VentanaPrincipal()
-    ventana.show()
-    sys.exit(app.exec_())
+    # Si llegamos aquí, la conexión es exitosa - Crear ventana principal
+    try:
+        ventana = VentanaPrincipal()
+        ventana.show()
+        
+        # Cargar configuraciones en el combobox del renombrador
+        ventana.renombrador.reload_configs_into_combo()
+        
+        print("🚀 Aplicación iniciada correctamente")
+        
+        sys.exit(app.exec_())
+        
+    except Exception as e:
+        print(f"❌ Error iniciando aplicación: {e}")
+        QMessageBox.critical(None, "Error Inesperado", 
+                           f"Error al iniciar la aplicación:\n\n{str(e)}\n\n"
+                           "Por favor, contacte al soporte técnico.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

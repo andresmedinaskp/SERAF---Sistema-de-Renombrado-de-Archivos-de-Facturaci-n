@@ -28,7 +28,8 @@ def ensure_table_exists():
     try:
         conn = db.get_connection()
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(1) FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = 'CONFIGURACIONES_NOMBRE_ARCHIVOS'")
+        # Consulta adaptada para Firebird
+        cur.execute("SELECT COUNT(*) FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = 'CONFIGURACIONES_NOMBRE_ARCHIVOS'")
         if cur.fetchone()[0] == 0:
             cur.execute(TABLA_SQL)
             try:
