@@ -932,7 +932,7 @@ class RenombradorCUVWidget(QWidget):
             return ""
 
     def procesar_archivos(self):
-        print("DEBUG: Método procesar_archivos llamado")  # Debug line
+        print("DEBUG: Método procesar_archivos llamado")
         if not self.carpetas:
             QMessageBox.warning(self, "Advertencia", "No hay carpetas seleccionadas.")
             return
@@ -949,7 +949,7 @@ class RenombradorCUVWidget(QWidget):
             config_id = self.cmb_configs.currentData()
             if config_id is None:
                 QMessageBox.warning(self, "Configuración requerida", 
-                                  "Para renombrar archivos debes seleccionar una configuración de nombres.")
+                                "Para renombrar archivos debes seleccionar una configuración de nombres.")
                 return
             try:
                 cfg = get_config_by_id(config_id)
@@ -965,13 +965,13 @@ class RenombradorCUVWidget(QWidget):
         if modificar_cuv:
             if not self.radio_eliminar_rechazados.isChecked() and not self.radio_eliminar_todo.isChecked():
                 QMessageBox.warning(self, "Advertencia", 
-                                  "Para modificar archivos CUV debes seleccionar una opción: eliminar RECHAZADOS o vaciar el array.")
+                                "Para modificar archivos CUV debes seleccionar una opción: eliminar RECHAZADOS o vaciar el array.")
                 return
 
         # Solicitar archivo de log
         archivo_log, _ = QFileDialog.getSaveFileName(self, "Guardar registro de procesamiento",
-                                                     f"Registro_CUV_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
-                                                     "Archivos de texto (*.log);;Todos los archivos (*)")
+                                                    f"Registro_CUV_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+                                                    "Archivos de texto (*.log);;Todos los archivos (*)")
         if not archivo_log:
             return
 
@@ -1013,9 +1013,12 @@ class RenombradorCUVWidget(QWidget):
 
             print(f"Procesando carpeta: {carpeta_real}")
 
-            # buscar archivos CUV
-            archivos_cuv = self.buscar_archivos_por_ext(carpeta_real, ['_cuv.json', '_cuv_renamed.json'])
-            
+            # buscar archivos CUV - MÉTODO MEJORADO
+            archivos_cuv = self.buscar_archivos_cuv_mejorado(carpeta_real)
+            print(f"  - Archivos CUV encontrados: {len(archivos_cuv)}")
+            for cuv in archivos_cuv:
+                print(f"    * {os.path.basename(cuv)}")
+
             # MODIFICAR ARCHIVOS CUV (si está activado)
             if modificar_cuv:
                 for archivo_cuv in archivos_cuv:
@@ -1028,11 +1031,63 @@ class RenombradorCUVWidget(QWidget):
 
             # RENOMBRAR ARCHIVOS (si está activado y hay configuración)
             if renombrar and cfg:
-                # buscar facturas
+                # PRIMERO: Procesar archivos CUV para renombrarlos
+                for archivo_cuv in archivos_cuv:
+                    try:
+                        # Extraer número de factura del nombre del archivo CUV
+                        try:
+                            with open(archivo_cuv, 'r', encoding='utf-8') as f:
+                                datos_cuv = json.load(f)
+                            num_factura = datos_cuv.get("NumFactura")  # Leer del campo "NumFactura" del JSON
+                        except Exception as e:
+                            print(f"Error leyendo CUV {archivo_cuv}: {e}")
+                            continue
+                        
+                        if not num_factura:
+                            print(f"  - No se pudo extraer número de factura de: {archivo_cuv}")
+                            continue
+                        
+                         # Obtener ProcesoId desde el archivo CUV
+                        proceso_id = self.obtener_proceso_id_desde_cuv(archivo_cuv)
+                        
+                        # Crear contexto para formateo
+                        contexto = {
+                            "numFactura": str(num_factura),
+                            "ProcesoId": proceso_id,
+                            "fecha": datetime.datetime.now().strftime('%Y%m%d'),
+                            "ano": datetime.datetime.now().strftime('%Y'),
+                            "mes": datetime.datetime.now().strftime('%m'),
+                            "dia": datetime.datetime.now().strftime('%d'),
+                            "ips": config_db.get("codigo_ips", ""),
+                            "nit": config_db.get("nit", ""),
+                            "nombreCarpeta": os.path.basename(carpeta_real)
+                        }
+                        
+                        # Renombrar archivo CUV
+                        if cfg.get('formato_cuv'):
+                            nuevo_nombre_cuv = apply_format(cfg.get('formato_cuv'), contexto)
+                            if nuevo_nombre_cuv:
+                                dir_cuv = os.path.dirname(archivo_cuv)
+                                nuevo_path_cuv = os.path.join(dir_cuv, nuevo_nombre_cuv)
+                                
+                                # Verificar si ya tiene el nombre correcto
+                                if os.path.basename(archivo_cuv) != nuevo_nombre_cuv:
+                                    if self._safe_move_or_write_json(archivo_cuv, nuevo_path_cuv):
+                                        renombrados['cuv'] += 1
+                                        print(f"  - Renombrado CUV: {os.path.basename(archivo_cuv)} -> {nuevo_nombre_cuv}")
+                                    else:
+                                        errores.append(f"Error renombrando CUV: {archivo_cuv}")
+                                else:
+                                    print(f"  - CUV ya tiene nombre correcto: {nuevo_nombre_cuv}")
+                                    renombrados['cuv'] += 1  # Contar como renombrado
+                        
+                    except Exception as e:
+                        errores.append(f"Error procesando CUV {archivo_cuv}: {e}")
+
+                # SEGUNDO: Procesar otros archivos (facturas, XML, PDF)
                 facturas = self.buscar_archivos_por_ext(carpeta_real, ['.json'])
-                facturas = [f for f in facturas if not f.lower().endswith('_cuv.json') and not f.lower().endswith('_cuv_renamed.json')]
+                facturas = [f for f in facturas if not any(cuv in f.lower() for cuv in ['_cuv', '_cuv_renamed'])]
                 
-                # buscar XML y PDF
                 archivos_xml = self.buscar_archivos_por_ext(carpeta_real, ['.xml'])
                 archivos_pdf = self.buscar_archivos_por_ext(carpeta_real, ['.pdf'])
 
@@ -1050,24 +1105,16 @@ class RenombradorCUVWidget(QWidget):
                         continue
                     
                     carpeta_actual = os.path.dirname(fact)
-                    proceso_id = ""  # Inicializamos vacío
+                    proceso_id = ""  # Para otros archivos, no necesitamos ProcesoId
                     
-                    # Buscar archivo CUV asociado y obtener ProcesoId
-                    archivo_cuv_asociado = None
-                    for archivo_cuv in archivos_cuv:
-                        if str(num_factura) in os.path.basename(archivo_cuv):
-                            archivo_cuv_asociado = archivo_cuv
-                            proceso_id = self.obtener_proceso_id_desde_cuv(archivo_cuv)
-                            break
-                
-                    # Buscar archivos asociados - MEJORADO
+                    # Buscar archivos asociados
                     xml_asociado, pdf_asociado = self._obtener_archivos_asociados(
                         num_factura, archivos_xml, archivos_pdf, carpeta_actual)
                     
-                    # contexto para formateo ACTUALIZADO
+                    # contexto para formateo
                     contexto = {
                         "numFactura": str(num_factura),
-                        "ProcesoId": proceso_id,  # Ahora usamos el ProcesoId del CUV
+                        "ProcesoId": proceso_id,
                         "fecha": datetime.datetime.now().strftime('%Y%m%d'),
                         "ano": datetime.datetime.now().strftime('%Y'),
                         "mes": datetime.datetime.now().strftime('%m'),
@@ -1084,27 +1131,15 @@ class RenombradorCUVWidget(QWidget):
                         if nuevo_nombre_fact:
                             dir_fact = os.path.dirname(fact)
                             nuevo_path_fact = os.path.join(dir_fact, nuevo_nombre_fact)
-                            if self._safe_move_or_write_json(fact, nuevo_path_fact):
-                                renombrados['fact'] += 1
-                                print(f"  - Renombrada factura: {os.path.basename(fact)} -> {nuevo_nombre_fact}")
+                            if os.path.basename(fact) != nuevo_nombre_fact:
+                                if self._safe_move_or_write_json(fact, nuevo_path_fact):
+                                    renombrados['fact'] += 1
+                                    print(f"  - Renombrada factura: {os.path.basename(fact)} -> {nuevo_nombre_fact}")
+                                else:
+                                    errores.append(f"Error renombrando factura: {fact}")
                             else:
-                                errores.append(f"Error renombrando factura: {fact}")
-
-                    # Buscar y renombrar CUV asociado
-                    archivo_cuv_asociado = None
-                    for archivo_cuv in archivos_cuv:
-                        if str(num_factura) in os.path.basename(archivo_cuv):
-                            archivo_cuv_asociado = archivo_cuv
-                            break
-                    
-                    if archivo_cuv_asociado and cfg.get('formato_cuv'):
-                        nuevo_nombre_cuv = apply_format(cfg.get('formato_cuv'), contexto)
-                        if nuevo_nombre_cuv:
-                            dir_cuv = os.path.dirname(archivo_cuv_asociado)
-                            nuevo_path_cuv = os.path.join(dir_cuv, nuevo_nombre_cuv)
-                            if self._safe_move_or_write_json(archivo_cuv_asociado, nuevo_path_cuv):
-                                renombrados['cuv'] += 1
-                                print(f"  - Renombrado CUV: {os.path.basename(archivo_cuv_asociado)} -> {nuevo_nombre_cuv}")
+                                print(f"  - Factura ya tiene nombre correcto: {nuevo_nombre_fact}")
+                                renombrados['fact'] += 1
 
                     # Renombrar XML asociado si se encontró
                     if xml_asociado and cfg.get('formato_xml'):
@@ -1112,11 +1147,15 @@ class RenombradorCUVWidget(QWidget):
                         if nuevo_nombre_xml:
                             dir_xml = os.path.dirname(xml_asociado)
                             nuevo_path_xml = os.path.join(dir_xml, nuevo_nombre_xml)
-                            if self._safe_move_or_write_json(xml_asociado, nuevo_path_xml):
-                                renombrados['xml'] += 1
-                                print(f"  - Renombrado XML: {os.path.basename(xml_asociado)} -> {nuevo_nombre_xml}")
+                            if os.path.basename(xml_asociado) != nuevo_nombre_xml:
+                                if self._safe_move_or_write_json(xml_asociado, nuevo_path_xml):
+                                    renombrados['xml'] += 1
+                                    print(f"  - Renombrado XML: {os.path.basename(xml_asociado)} -> {nuevo_nombre_xml}")
+                                else:
+                                    errores.append(f"Error renombrando XML: {xml_asociado}")
                             else:
-                                errores.append(f"Error renombrando XML: {xml_asociado}")
+                                print(f"  - XML ya tiene nombre correcto: {nuevo_nombre_xml}")
+                                renombrados['xml'] += 1
 
                     # Renombrar PDF asociado si se encontró
                     if pdf_asociado and cfg.get('formato_pdf'):
@@ -1124,11 +1163,15 @@ class RenombradorCUVWidget(QWidget):
                         if nuevo_nombre_pdf:
                             dir_pdf = os.path.dirname(pdf_asociado)
                             nuevo_path_pdf = os.path.join(dir_pdf, nuevo_nombre_pdf)
-                            if self._safe_move_or_write_json(pdf_asociado, nuevo_path_pdf):
-                                renombrados['pdf'] += 1
-                                print(f"  - Renombrado PDF: {os.path.basename(pdf_asociado)} -> {nuevo_nombre_pdf}")
+                            if os.path.basename(pdf_asociado) != nuevo_nombre_pdf:
+                                if self._safe_move_or_write_json(pdf_asociado, nuevo_path_pdf):
+                                    renombrados['pdf'] += 1
+                                    print(f"  - Renombrado PDF: {os.path.basename(pdf_asociado)} -> {nuevo_nombre_pdf}")
+                                else:
+                                    errores.append(f"Error renombrando PDF: {pdf_asociado}")
                             else:
-                                errores.append(f"Error renombrando PDF: {pdf_asociado}")
+                                print(f"  - PDF ya tiene nombre correcto: {nuevo_nombre_pdf}")
+                                renombrados['pdf'] += 1
 
         # fin procesamiento
         self.progress_updated.emit(100)
@@ -1174,6 +1217,44 @@ class RenombradorCUVWidget(QWidget):
         self.btn_procesar.setEnabled(True)
         self.progress_bar.setVisible(False)
     
+    def buscar_archivos_cuv_mejorado(self, carpeta):
+        """Busca archivos CUV de manera más efectiva"""
+        archivos_cuv = []
+        for raiz, _, archivos in os.walk(carpeta):
+            for archivo in archivos:
+                nombre_lower = archivo.lower()
+                # Buscar archivos que contengan 'cuv' y terminen en .json
+                if 'cuv' in nombre_lower and nombre_lower.endswith('.json'):
+                    archivos_cuv.append(os.path.join(raiz, archivo))
+        return sorted(archivos_cuv)
+
+    def extraer_num_factura_de_nombre(self, nombre_archivo):
+        """Extrae el número de factura del nombre del archivo CUV"""
+        try:
+            # Patrones comunes en nombres de archivos CUV
+            import re
+            patrones = [
+                r'(\d+)_cuv',           # 12345_cuv.json
+                r'cuv_(\d+)',           # cuv_12345.json  
+                r'(\d+)-cuv',           # 12345-cuv.json
+                r'cuv-(\d+)',           # cuv-12345.json
+                r'(\d+)\.',             # 12345.cuv.json
+            ]
+            
+            for patron in patrones:
+                match = re.search(patron, nombre_archivo.lower())
+                if match:
+                    return match.group(1)
+            
+            # Si no coincide con patrones, buscar cualquier número en el nombre
+            numeros = re.findall(r'\d+', nombre_archivo)
+            if numeros:
+                # Devolver el número más largo (probablemente el de factura)
+                return max(numeros, key=len)
+                
+            return None
+        except Exception:
+            return None
     def es_archivo_ya_procesado(self, archivo, contexto, fmt_cuv, fmt_fact, fmt_xml, fmt_pdf):
         """Verifica si un archivo ya tiene el nombre esperado (ya fue procesado)"""
         nombre_archivo = os.path.basename(archivo)
