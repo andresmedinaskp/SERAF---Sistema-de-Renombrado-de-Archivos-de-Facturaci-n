@@ -6,8 +6,8 @@
 
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 0, 0),         # Versión interna del archivo (mayor, menor, revisión, build)
-    prodvers=(1, 0, 0, 0),         # Versión del producto (mayor, menor, revisión, build)
+    filevers=(1, 0, 0, 1),         # Versión interna del archivo (mayor, menor, revisión, build)
+    prodvers=(1, 0, 0, 1),         # Versión del producto (mayor, menor, revisión, build)
     mask=0x3f,
     flags=0x0,
     OS=0x4,
@@ -22,12 +22,12 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', 'Dev Tools'),
           StringStruct('FileDescription', 'Aplicativo de nombramiento de archivos RIPS CUV XML PDF'),
-          StringStruct('FileVersion', '1.0.0.0'),
+          StringStruct('FileVersion', '1.0.0.1'),
           StringStruct('InternalName', 'Renombrar Archivos'),     # Nombre interno (coincide con tu script principal)
           StringStruct('LegalCopyright', '© 2025 Dev Tools. Todos los derechos reservados.'),
           StringStruct('OriginalFilename', 'cuv.exe'),  # Nombre de tu EXE final
           StringStruct('ProductName', 'SERAF - Sistema de Renombrado de Archivos de Facturación'),
-          StringStruct('ProductVersion', '1.0.0.0')
+          StringStruct('ProductVersion', '1.0.0.1')
         ]
       )
     ]),

@@ -1227,6 +1227,92 @@ class RenombradorCUVWidget(QWidget):
                 if 'cuv' in nombre_lower and nombre_lower.endswith('.json'):
                     archivos_cuv.append(os.path.join(raiz, archivo))
         return sorted(archivos_cuv)
+    
+    def extraer_proceso_id_desde_observaciones(self, observaciones):
+        """Extrae el ProcesoId del texto de observaciones"""
+        try:
+            if not observaciones:
+                return None
+                
+            # Buscar el patrón "ProcesoId" seguido de números
+            import re
+            patron = r'ProcesoId\s*(\d+)'
+            match = re.search(patron, observaciones)
+            
+            if match:
+                return match.group(1)  # Devuelve el número encontrado
+            return None
+        except Exception:
+            return None
+
+    def modificar_archivo_cuv(self, archivo_cuv):
+        """Modifica el archivo CUV según las opciones seleccionadas"""
+        try:
+            # Leer archivo CUV
+            with open(archivo_cuv, 'r', encoding='utf-8') as f:
+                datos_cuv = json.load(f)
+            
+            modificado = False
+            
+            # EXTRAER Y ACTUALIZAR ProcesoId DESDE OBSERVACIONES
+            proceso_id_actualizado = False
+            for resultado in datos_cuv.get('ResultadosValidacion', []):
+                observaciones = resultado.get('Observaciones', '')
+                if observaciones:
+                    proceso_id = self.extraer_proceso_id_desde_observaciones(observaciones)
+                    if proceso_id and proceso_id != datos_cuv.get('ProcesoId'):
+                        datos_cuv['ProcesoId'] = proceso_id
+                        proceso_id_actualizado = True
+                        print(f"  - Actualizado ProcesoId: {proceso_id}")
+                        break  # Solo necesitamos el primero que encontremos
+            
+            if self.radio_eliminar_rechazados.isChecked():
+                # Buscar elementos RECHAZADOS y el CUV
+                cuv_encontrado = None
+                validaciones_filtradas = []
+                
+                for r in datos_cuv.get('ResultadosValidacion', []):
+                    if r.get('Clase') == 'RECHAZADO':
+                        # Si es rechazado, buscar el CUV si es RVG02
+                        if r.get('Codigo') == 'RVG02':
+                            desc = r.get('Observaciones', '')
+                            try:
+                                cuv_start = desc.index("Ministerio de Salud; CUV ") + len("Ministerio de Salud; CUV ")
+                                cuv_end = desc.index(" del Documento")
+                                cuv_encontrado = desc[cuv_start:cuv_end].strip()
+                            except ValueError:
+                                pass
+                    else:
+                        # Mantener solo los no rechazados
+                        validaciones_filtradas.append(r)
+                
+                # Actualizar validaciones sin los rechazados
+                datos_cuv['ResultadosValidacion'] = validaciones_filtradas
+                
+                # Si encontramos CUV, actualizar estado
+                if cuv_encontrado:
+                    datos_cuv['CodigoUnicoValidacion'] = cuv_encontrado
+                    datos_cuv['ResultState'] = True
+                
+                modificado = True
+                
+            elif self.radio_eliminar_todo.isChecked():
+                # Vaciar array de validaciones y actualizar estado
+                datos_cuv['ResultadosValidacion'] = []
+                datos_cuv['ResultState'] = True
+                modificado = True
+            
+            # Si hubo modificaciones (ya sea en ProcesoId o en validaciones), guardar archivo
+            if modificado or proceso_id_actualizado:
+                with open(archivo_cuv, 'w', encoding='utf-8') as f:
+                    json.dump(datos_cuv, f, indent=4, ensure_ascii=False)
+                return True
+                
+            return False
+            
+        except Exception as e:
+            print(f"Error procesando archivo CUV {archivo_cuv}: {e}")
+            return False
 
     def extraer_num_factura_de_nombre(self, nombre_archivo):
         """Extrae el número de factura del nombre del archivo CUV"""
@@ -1327,63 +1413,6 @@ class RenombradorCUVWidget(QWidget):
             return True
         except Exception as e:
             print(f"Error en _safe_move_or_write_json: {e}")
-            return False
-
-    def modificar_archivo_cuv(self, archivo_cuv):
-        """Modifica el archivo CUV según las opciones seleccionadas"""
-        try:
-            # Leer archivo CUV
-            with open(archivo_cuv, 'r', encoding='utf-8') as f:
-                datos_cuv = json.load(f)
-            
-            modificado = False
-            
-            if self.radio_eliminar_rechazados.isChecked():
-                # Buscar elementos RECHAZADOS y el CUV
-                cuv_encontrado = None
-                validaciones_filtradas = []
-                
-                for r in datos_cuv.get('ResultadosValidacion', []):
-                    if r.get('Clase') == 'RECHAZADO':
-                        # Si es rechazado, buscar el CUV si es RVG02
-                        if r.get('Codigo') == 'RVG02':
-                            desc = r.get('Observaciones', '')
-                            try:
-                                cuv_start = desc.index("Ministerio de Salud; CUV ") + len("Ministerio de Salud; CUV ")
-                                cuv_end = desc.index(" del Documento")
-                                cuv_encontrado = desc[cuv_start:cuv_end].strip()
-                            except ValueError:
-                                pass
-                    else:
-                        # Mantener solo los no rechazados
-                        validaciones_filtradas.append(r)
-                
-                # Actualizar validaciones sin los rechazados
-                datos_cuv['ResultadosValidacion'] = validaciones_filtradas
-                
-                # Si encontramos CUV, actualizar estado
-                if cuv_encontrado:
-                    datos_cuv['CodigoUnicoValidacion'] = cuv_encontrado
-                    datos_cuv['ResultState'] = True
-                
-                modificado = True
-                
-            elif self.radio_eliminar_todo.isChecked():
-                # Vaciar array de validaciones y actualizar estado
-                datos_cuv['ResultadosValidacion'] = []
-                datos_cuv['ResultState'] = True
-                modificado = True
-            
-            # Si hubo modificaciones, guardar archivo
-            if modificado:
-                with open(archivo_cuv, 'w', encoding='utf-8') as f:
-                    json.dump(datos_cuv, f, indent=4, ensure_ascii=False)
-                return True
-                
-            return False
-            
-        except Exception as e:
-            print(f"Error procesando archivo CUV {archivo_cuv}: {e}")
             return False
 
 def leer_version():
