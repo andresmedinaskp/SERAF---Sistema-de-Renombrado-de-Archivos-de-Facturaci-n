@@ -5,174 +5,183 @@ import json
 import os
 import platform
 import subprocess
+import re
 
+# =====================================================
+# CONFIGURACIÓN DE SEGURIDAD (NO CAMBIAR)
+# =====================================================
+SECRET_KEY = "S3R4F-2026-LICENCIA-ULTRA-PRIVATE"
+
+# =====================================================
+# OBTENER UUID DEL EQUIPO
+# =====================================================
 def get_machine_uuid():
-    """Intenta obtener un identificador estable del equipo (UUID).
-    Orden de comprobación:
-      1) Variable de entorno LICENSE_UUID o MACHINE_UUID
-      2) Windows: WMIC
-      3) Windows: PowerShell (Get-CimInstance o Get-WmiObject)
-      4) Linux: /sys/class/dmi/id/product_uuid
-      5) macOS: ioreg
-    Devuelve cadena o None.
     """
-    # 1) permitir override vía variable de entorno (útil para pruebas y shells)
-    env_uuid = os.environ.get('LICENSE_UUID') or os.environ.get('MACHINE_UUID')
+    Obtiene un UUID estable del equipo.
+    Si no se puede obtener → retorna None (licencia inválida).
+    """
+
+    # Permitir override SOLO para pruebas controladas
+    env_uuid = os.environ.get("LICENSE_UUID")
     if env_uuid:
-        return env_uuid.strip()
+        return env_uuid.strip().upper()
 
     sistema = platform.system()
 
     try:
         if sistema == "Windows":
-            # 2) Intentar WMIC
-            try:
-                result = subprocess.run(["wmic", "csproduct", "get", "uuid"], capture_output=True, text=True, shell=False)
-                out = result.stdout.strip().splitlines()
-                # buscar la línea que no sea "UUID"
-                for line in out:
-                    line = line.strip()
-                    if line and line.upper() != "UUID":
-                        return line
-            except Exception:
-                pass
+            ps_paths = [
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe",
+            ]
 
-            # 3) Intentar PowerShell (Get-CimInstance), luego Get-WmiObject como fallback
-            try:
-                # Get-CimInstance (más moderno)
-                cmd = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                       '-Command', '(Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID']
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                out = result.stdout.strip()
-                if out:
-                    # puede venir con líneas, tomar última no vacía
-                    for line in out.splitlines()[::-1]:
-                        if line.strip():
-                            return line.strip()
-            except Exception:
-                pass
+            powershell = next((p for p in ps_paths if os.path.exists(p)), None)
+            if not powershell:
+                return None
 
-            try:
-                # Fallback a Get-WmiObject (antiguo)
-                cmd = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                       '-Command', 'Get-WmiObject -Class Win32_ComputerSystemProduct | Select-Object -ExpandProperty UUID']
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                out = result.stdout.strip()
-                if out:
-                    return out.splitlines()[-1].strip()
-            except Exception:
-                pass
+            cmd = [
+                powershell,
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-Command",
+                "(Get-CimInstance Win32_ComputerSystemProduct).UUID"
+            ]
 
-            return None
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=10, shell=False
+            )
+
+            uuid = result.stdout.strip().upper()
+            return uuid if uuid else None
 
         elif sistema == "Linux":
             path = "/sys/class/dmi/id/product_uuid"
-            try:
+            if os.path.exists(path):
                 with open(path, "r") as f:
-                    return f.read().strip()
-            except Exception:
-                return None
+                    return f.read().strip().upper()
 
         elif sistema == "Darwin":  # macOS
-            try:
-                result = subprocess.run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], capture_output=True, text=True)
-                for line in result.stdout.splitlines():
-                    if "IOPlatformUUID" in line:
-                        parts = line.split('"')
-                        if len(parts) >= 4:
-                            return parts[-2]
-            except Exception:
-                return None
-        else:
-            return None
+            cmd = ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            for line in result.stdout.splitlines():
+                if "IOPlatformUUID" in line:
+                    return line.split('"')[-2].upper()
 
     except Exception:
         return None
 
+    return None
 
+
+# =====================================================
+# CONTROL DE LICENCIA
+# =====================================================
 class ControlLicencia:
-    def __init__(self, nombre_aplicativo):
-        self.nombre_aplicativo = nombre_aplicativo
-        self.archivo_licencia = f"licencia_{nombre_aplicativo.lower()}.key"
 
-    def generar_licencia(self, dias_validez=90, uuid_equipo=None):
-        """
-        GENERA un nuevo archivo de licencia.
-        Si se pasa uuid_equipo se ata a ese UUID; si no, intenta obtener el UUID local.
-        """
-        fecha_fin = datetime.datetime.now() + datetime.timedelta(days=dias_validez)
-        uuid_equipo = uuid_equipo or get_machine_uuid() or "UUID_DESCONOCIDO"
+    def __init__(self, nombre_aplicativo: str):
+        self.nombre_aplicativo = nombre_aplicativo.upper()
+        self.archivo_licencia = f"licencia_{self.nombre_aplicativo.lower()}.key"
 
-        datos_licencia = {
-            'aplicativo': self.nombre_aplicativo,
-            'uuid_equipo': uuid_equipo,
-            'fecha_inicio': datetime.datetime.now().strftime('%Y-%m-%d'),
-            'fecha_fin': fecha_fin.strftime('%Y-%m-%d'),
-            'hash_verificacion': self._generar_hash(fecha_fin, uuid_equipo)
+    # -----------------------------
+    # Normalizar UUID
+    # -----------------------------
+    def _normalizar_uuid(self, uuid: str) -> str | None:
+        if not uuid:
+            return None
+        uuid = uuid.strip().upper()
+        return re.sub(r"[^A-F0-9\-]", "", uuid)
+
+    # -----------------------------
+    # Firmar datos COMPLETOS
+    # -----------------------------
+    def _firmar_datos(self, datos: dict) -> str:
+        copia = datos.copy()
+        copia.pop("hash_verificacion", None)
+
+        payload = json.dumps(copia, sort_keys=True, separators=(",", ":"))
+        texto = payload + SECRET_KEY
+
+        return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+    # =================================================
+    # GENERAR LICENCIA
+    # =================================================
+    def generar_licencia(self, dias_validez: int, uuid_equipo: str | None = None):
+        fecha_inicio = datetime.datetime.now()
+        fecha_fin = fecha_inicio + datetime.timedelta(days=dias_validez)
+
+        uuid = self._normalizar_uuid(uuid_equipo) if uuid_equipo else self._normalizar_uuid(get_machine_uuid())
+        if not uuid:
+            raise RuntimeError("No se pudo obtener UUID del equipo")
+
+        datos = {
+            "aplicativo": self.nombre_aplicativo,
+            "uuid_equipo": uuid,
+            "fecha_inicio": fecha_inicio.strftime("%Y-%m-%d"),
+            "fecha_fin": fecha_fin.strftime("%Y-%m-%d"),
         }
 
-        with open(self.archivo_licencia, 'w') as f:
-            json.dump(datos_licencia, f, indent=4)
+        datos["hash_verificacion"] = self._firmar_datos(datos)
 
-        return f"Licencia para '{self.nombre_aplicativo}' generada hasta: {fecha_fin.strftime('%d/%m/%Y')} (UUID: {uuid_equipo})"
+        with open(self.archivo_licencia, "w", encoding="utf-8") as f:
+            json.dump(datos, f, indent=4)
 
-    def _generar_hash(self, fecha_fin, uuid_equipo):
-        texto = f"LICENCIA_{self.nombre_aplicativo.upper()}_{fecha_fin.strftime('%Y%m%d')}_{uuid_equipo}"
-        return hashlib.sha256(texto.encode()).hexdigest()
+        return f"Licencia generada hasta {fecha_fin.strftime('%d/%m/%Y')}"
 
+    # =================================================
+    # VERIFICAR LICENCIA
+    # =================================================
     def verificar_licencia(self):
         if not os.path.exists(self.archivo_licencia):
-            return False, (f"⚠️ No se encontró archivo de licencia para '{self.nombre_aplicativo}'.\n\n"
-                           "¿Necesita ayuda? Contacte al administrador.")
+            return False, "❌ Archivo de licencia no encontrado"
+
         try:
-            with open(self.archivo_licencia, 'r') as f:
+            with open(self.archivo_licencia, "r", encoding="utf-8") as f:
                 datos = json.load(f)
 
-            if datos.get('aplicativo') != self.nombre_aplicativo:
-                return False, f"❌ Licencia no válida para '{self.nombre_aplicativo}'"
+            if datos.get("aplicativo") != self.nombre_aplicativo:
+                return False, "❌ Licencia no corresponde a este aplicativo"
 
-            uuid_actual = get_machine_uuid() or "UUID_DESCONOCIDO"
-            if datos.get('uuid_equipo') != uuid_actual:
-                return False, "❌ Licencia inválida: no corresponde a este equipo"
+            uuid_sistema = self._normalizar_uuid(get_machine_uuid())
+            if not uuid_sistema:
+                return False, "❌ No se pudo validar el equipo"
 
-            fecha_fin = datetime.datetime.strptime(datos['fecha_fin'], '%Y-%m-%d')
-            hash_correcto = self._generar_hash(fecha_fin, datos.get('uuid_equipo'))
+            if datos.get("uuid_equipo") != uuid_sistema:
+                return False, "❌ Licencia no corresponde a este equipo"
 
-            if datos.get('hash_verificacion') != hash_correcto:
-                return False, "❌ Licencia alterada. Contacte al proveedor."
+            # Verificar integridad
+            if datos.get("hash_verificacion") != self._firmar_datos(datos):
+                return False, "❌ Licencia modificada o falsificada"
 
-            fecha_inicio = datetime.datetime.strptime(datos['fecha_inicio'], '%Y-%m-%d')
-            return self._verificar_fechas(fecha_inicio, fecha_fin)
+            fecha_inicio = datetime.datetime.strptime(datos["fecha_inicio"], "%Y-%m-%d")
+            fecha_fin = datetime.datetime.strptime(datos["fecha_fin"], "%Y-%m-%d")
+            ahora = datetime.datetime.now()
+
+            if ahora < fecha_inicio:
+                return False, f"❌ Licencia inicia el {fecha_inicio:%d/%m/%Y}"
+
+            if ahora > fecha_fin:
+                return False, f"❌ Licencia vencida el {fecha_fin:%d/%m/%Y}"
+
+            dias_restantes = (fecha_fin - ahora).days
+            return True, f"✅ Licencia válida ({dias_restantes} días restantes)"
 
         except Exception as e:
-            return False, f"❌ Error leyendo licencia: {str(e)}"
+            return False, f"❌ Error en licencia: {str(e)}"
 
-    def _verificar_fechas(self, fecha_inicio, fecha_fin):
-        ahora = datetime.datetime.now()
-        if ahora < fecha_inicio:
-            dias_faltantes = (fecha_inicio - ahora).days
-            return False, f"Licencia no activa. Inicia: {fecha_inicio.strftime('%d/%m/%Y')}"
-        elif ahora > fecha_fin:
-            return False, f"Licencia vencida: {fecha_fin.strftime('%d/%m/%Y')}"
-        else:
-            dias_restantes = (fecha_fin - ahora).days
-            return True, f"Aplicativo: {self.nombre_aplicativo}\nFecha Inicio: {fecha_inicio.strftime('%d/%m/%Y')}\nFecha Fin: {fecha_fin.strftime('%d/%m/%Y')}\nDías Restantes: {dias_restantes}"
-    def obtener_dias_restantes(self):
-        if not os.path.exists(self.archivo_licencia):
-            return 0
-        try:
-            with open(self.archivo_licencia, 'r') as f:
-                datos = json.load(f)
-            if datos.get('aplicativo') != self.nombre_aplicativo:
-                return 0
-            fecha_fin = datetime.datetime.strptime(datos['fecha_fin'], '%Y-%m-%d')
-            ahora = datetime.datetime.now()
-            if ahora > fecha_fin:
-                return 0
-            return (fecha_fin - ahora).days
-        except:
-            return 0
 
+# =====================================================
+# FUNCIÓN GLOBAL
+# =====================================================
 def verificar_licencia_global(nombre_aplicativo="SERAF"):
-    control = ControlLicencia(nombre_aplicativo)
-    return control.verificar_licencia()
+    return ControlLicencia(nombre_aplicativo).verificar_licencia()
+
+
+# =====================================================
+# DIAGNÓSTICO LOCAL
+# =====================================================
+if __name__ == "__main__":
+    print("=== DIAGNÓSTICO DE LICENCIA ===")
+    control = ControlLicencia("SERAF")
+    ok, msg = control.verificar_licencia()
+    print(msg)
